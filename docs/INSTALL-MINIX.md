@@ -5,8 +5,9 @@ Remote Desktop). The camera is connected to that PC by USB.
 
 ## 1. Transfer
 
-Build a zip on the development PC (`git archive --format=zip -o dist\m3alpaca.zip HEAD`) or clone the
-repository on the telescope PC.
+Download the source zip of the latest release from
+[Releases](https://github.com/radorybar/canon-m3-ascom/releases), clone the repository on the telescope
+PC, or build a zip on a development PC (`git archive --format=zip -o dist\m3alpaca.zip HEAD`).
 
 Over Remote Desktop: copy the zip with **Ctrl+C** on the local PC and **Ctrl+V** in the remote session
 (or enable drive redirection: Remote Desktop → Show Options → Local Resources → More… → Drives), then
