@@ -1,0 +1,35 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: diag
+    attributes:
+      label: ptpdiag output
+      description: Output of `python -m m3alpaca.ptpdiag` (add `--shoot 1` if capture fails)
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Driver log
+      description: The relevant lines from the m3alpaca console
+      render: text
+  - type: input
+    id: camera
+    attributes:
+      label: Camera, firmware and CHDK build
+      placeholder: Canon EOS M3, 1.21A, CHDK 1.6.1-6315
+    validations:
+      required: true
+  - type: input
+    id: software
+    attributes:
+      label: Windows and imaging software versions
+      placeholder: Windows 11, N.I.N.A. 3.2

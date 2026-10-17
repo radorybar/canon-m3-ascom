@@ -121,6 +121,11 @@ src/m3alpaca/
 scripts/         install.ps1, start-driver.cmd
 ```
 
+## Contributing
+
+Issues and pull requests are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). Changes reach `main` only
+through pull requests approved by the maintainer. Security issues: [SECURITY.md](SECURITY.md).
+
 ## Acknowledgements
 
 [CHDK](https://chdk.fandom.com/wiki/CHDK) and [chdkptp](https://app.assembla.com/spaces/chdkptp/wiki)

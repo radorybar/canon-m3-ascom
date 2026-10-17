@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest an improvement or support for another camera
+labels: [enhancement]
+body:
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How could m3alpaca help? For another CHDK camera, include the `ptpdiag` output.
