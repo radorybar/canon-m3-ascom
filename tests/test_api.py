@@ -4,7 +4,7 @@ import time
 
 import numpy as np
 
-from m3alpaca.alpaca import imagebytes
+from canon_m3_ascom.alpaca import imagebytes
 
 BASE = "/api/v1/camera/0"
 
@@ -66,12 +66,15 @@ def test_properties(client):
     assert get(client, "cameraysize")["Value"] == 4000
     assert get(client, "sensortype")["Value"] == 2  # RGGB
     assert get(client, "maxadu")["Value"] == 16383
-    gains = get(client, "gains")["Value"]
-    assert "800" in gains
-    assert get(client, "gainmin")["ErrorNumber"] == 0x400
-    assert put(client, "gain", Gain=str(len(gains)))["ErrorNumber"] == 0x401
-    assert put(client, "gain", Gain="2")["ErrorNumber"] == 0
-    assert get(client, "gain")["Value"] == 2
+    # gain is the ISO value (min/max mode), the list mode is not offered
+    assert get(client, "gains")["ErrorNumber"] == 0x400
+    assert get(client, "gainmin")["Value"] == 100
+    assert get(client, "gainmax")["Value"] == 12800
+    assert get(client, "gain")["Value"] == 800  # default_iso
+    assert put(client, "gain", Gain="50")["ErrorNumber"] == 0x401
+    assert put(client, "gain", Gain="25600")["ErrorNumber"] == 0x401
+    assert put(client, "gain", Gain="1000")["ErrorNumber"] == 0  # in-between ISO values are fine
+    assert get(client, "gain")["Value"] == 1000
     assert get(client, "ccdtemperature")["ErrorNumber"] == 0
     assert get(client, "camerastate")["Value"] == 0
 
@@ -109,6 +112,20 @@ def test_invalid_exposures(client):
     put(client, "numx", NumX="7000")
     assert put(client, "startexposure", Duration="1", Light="True")["ErrorNumber"] == 0x401
     assert get(client, "imagearray")["ErrorNumber"] == 0x40B
+
+
+def test_unexpected_errors_become_alpaca_errors(client, monkeypatch):
+    connect(client)
+    from canon_m3_ascom.camera import Camera
+
+    def boom(self):
+        raise RuntimeError("libusb exploded")
+
+    monkeypatch.setattr(Camera, "ccd_temperature", property(boom))
+    r = client.get(f"{BASE}/ccdtemperature")
+    assert r.status_code == 200
+    assert r.json()["ErrorNumber"] == 0x500 and "libusb exploded" in r.json()["ErrorMessage"]
+    assert get(client, "cameraxsize")["Value"] == 6000  # the server keeps working
 
 
 def test_abort(client):

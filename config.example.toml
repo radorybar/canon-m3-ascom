@@ -1,4 +1,4 @@
-﻿# Copy to config.toml and run:  .venv\Scripts\m3alpaca.exe --config config.toml
+﻿# Copy to config.toml and run:  .venv\Scripts\canon-m3-ascom.exe --config config.toml
 
 [server]
 host = "0.0.0.0"          # all interfaces (needed for discovery); "127.0.0.1" = local only,
@@ -9,15 +9,18 @@ imagebytes_uint16 = true  # false -> send Int32 pixels (try if N.I.N.A. shows ga
 
 [camera]
 backend = "sim"           # "sim" = simulated star field
-                          # "ptp" = real camera, built-in CHDK PTP client (WinUSB driver via Zadig)
+                          # "ptp" = real camera, built-in CHDK PTP client (see [ptp] transport)
                           # "chdk" = real camera through an external chdkptp.exe
 exposure_min = 0.00025    # 1/4000 s
 exposure_max = 300.0       # verified on the M3 up to 120 s (CHDK allows up to 2048 s)
 default_iso = 800
-# frames_dir = "C:/Users/<you>/AppData/Local/m3alpaca/frames"
+# frames_dir = "C:/Users/<you>/AppData/Local/canon-m3-ascom/frames"
 
 [ptp]
-pid = 0                   # USB product id, 0 = first Canon camera (EOS M3 is 0x3299)
+transport = "auto"        # "wpd" = standard Windows driver (no driver change, ~1.5 s per frame)
+                          # "winusb" = WinUSB driver from Zadig/the installer (~1.2 s per frame)
+                          # "auto" = WinUSB if installed, otherwise the standard driver
+pid = 0                  # USB product id, 0 = first Canon camera (EOS M3 is 0x3299)
 lcd_off = false           # switch the camera LCD off after connecting (less sensor heat)
 prevent_shutdown = true   # CHDK "prevent shutdown" = always
 dark_frame_off = true     # no automatic in-camera dark frame (doubles exposure time otherwise)
@@ -28,7 +31,7 @@ keep_raw = false          # also save every raw buffer (.raw) into camera.frames
 [chdk]
 command = ["C:/tools/chdkptp/chdkptp.exe"]
 # Camera emulator instead of the real chdkptp:
-# command = [".venv/Scripts/python.exe", "-m", "m3alpaca.fakechdk"]
+# command = [".venv/Scripts/python.exe", "-m", "canon_m3_ascom.fakechdk"]
 format = "raw"
 timeout_extra_s = 30.0
 keep_files = false        # true keeps the .raw files in frames_dir

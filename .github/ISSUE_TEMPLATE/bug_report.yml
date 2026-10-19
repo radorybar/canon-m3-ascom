@@ -13,13 +13,13 @@ body:
     id: diag
     attributes:
       label: ptpdiag output
-      description: Output of `python -m m3alpaca.ptpdiag` (add `--shoot 1` if capture fails)
+      description: Output of `python -m canon_m3_ascom.ptpdiag` (add `--shoot 1` if capture fails)
       render: text
   - type: textarea
     id: log
     attributes:
       label: Driver log
-      description: The relevant lines from the m3alpaca console
+      description: The relevant lines from the canon-m3-ascom console
       render: text
   - type: input
     id: camera

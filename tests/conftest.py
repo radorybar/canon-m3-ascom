@@ -3,12 +3,12 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-from m3alpaca.alpaca.server import create_app
-from m3alpaca.backends import create_backend
-from m3alpaca.camera import Camera
-from m3alpaca.config import Config
+from canon_m3_ascom.alpaca.server import create_app
+from canon_m3_ascom.backends import create_backend
+from canon_m3_ascom.camera import Camera
+from canon_m3_ascom.config import Config
 
-FAKE_CHDKPTP = [sys.executable, "-m", "m3alpaca.fakechdk"]
+FAKE_CHDKPTP = [sys.executable, "-m", "canon_m3_ascom.fakechdk"]
 
 
 def make_config(backend: str, tmp_path) -> Config:

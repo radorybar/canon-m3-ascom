@@ -5,11 +5,11 @@ import threading
 import numpy as np
 import pytest
 
-from m3alpaca import starfield
-from m3alpaca.alpaca.discovery import DiscoveryResponder
-from m3alpaca.backends import BackendError
-from m3alpaca.backends.chdk import ChdkBackend, format_tv
-from m3alpaca.sensor import EOS_M3
+from canon_m3_ascom import starfield
+from canon_m3_ascom.alpaca.discovery import DiscoveryResponder
+from canon_m3_ascom.backends import BackendError
+from canon_m3_ascom.backends.chdk import ChdkBackend, format_tv
+from canon_m3_ascom.sensor import EOS_M3
 
 from .conftest import make_config
 
@@ -51,6 +51,41 @@ def test_defocus_blurs_stars():
     # roughly the same total light, just spread out
     s, b = (float(np.sum(i.astype(np.int64) - EOS_M3.black_level)) for i in (sharp, blurred))
     assert abs(s - b) / s < 0.2
+
+
+def test_discovery_survives_vanished_client():
+    """Windows raises ConnectionResetError after replying to a client that already closed its socket."""
+    d = DiscoveryResponder(alpaca_port=11112, discovery_port=0, bind="127.0.0.1").start()
+    try:
+        gone = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        gone.sendto(b"alpacadiscovery1", ("127.0.0.1", d.port))
+        gone.close()
+        import time
+        time.sleep(0.3)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(2)
+        s.sendto(b"alpacadiscovery1", ("127.0.0.1", d.port))
+        assert json.loads(s.recvfrom(1024)[0]) == {"AlpacaPort": 11112}
+        assert d.alive
+    finally:
+        d.close()
+
+
+def test_discovery_ignores_other_messages_and_floods():
+    d = DiscoveryResponder(alpaca_port=11112, discovery_port=0, bind="127.0.0.1").start()
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.sendto(b"hello", ("127.0.0.1", d.port))
+        with pytest.raises(socket.timeout):
+            s.recvfrom(1024)
+        for _ in range(5):  # a burst gets one answer
+            s.sendto(b"alpacadiscovery1", ("127.0.0.1", d.port))
+        s.recvfrom(1024)
+        with pytest.raises(socket.timeout):
+            s.recvfrom(1024)
+    finally:
+        d.close()
 
 
 def test_discovery():

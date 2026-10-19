@@ -39,8 +39,12 @@ def _bool(v: bool) -> str:
     return "true" if v else "false"
 
 
-def setup(lcd_off: bool, prevent_shutdown: bool, dark_frame_off: bool) -> str:
+def setup(lcd_off: bool, prevent_shutdown: bool, dark_frame_off: bool, unlock: bool = False) -> str:
+    # unlock: when the standard Windows driver (WPD) owns the camera, Canon firmware can sit in a
+    # "connected to PC" state where remote capture never delivers data; the DryOS logical event 4482
+    # (CHDK wiki, PTP Extension FAQ) releases it. Verified on the EOS M3 over WPD.
     return f"""{TAG_SETUP}
+if {_bool(unlock)} and type(post_levent_to_ui) == 'function' then post_levent_to_ui(4482) sleep(300) end
 if not get_mode() then
   switch_mode_usb(1)
   local t0 = get_tick_count()

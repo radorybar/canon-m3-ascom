@@ -1,6 +1,6 @@
 """Stand-in for chdkptp.exe that answers the batch commands the CHDK backend sends.
 
-Run as `python -m m3alpaca.fakechdk -c -e"rec" -e"rs <dest> -raw -tv=5 -svm=800"`.
+Run as `python -m canon_m3_ascom.fakechdk -c -e"rec" -e"rs <dest> -raw -tv=5 -svm=800"`.
 Lets the real ChdkBackend (subprocess, file handling, raw decoding) be tested without a camera.
 
 Environment:

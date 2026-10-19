@@ -38,11 +38,13 @@ class Camera:
         self.cfg = cfg
         self._lock = threading.Lock()
         self._connected = False
+        self._disconnecting: threading.Thread | None = None
+        self._exposure_thread: threading.Thread | None = None
         self.startx = 0
         self.starty = 0
         self.numx = self.spec.width
         self.numy = self.spec.height
-        self._gain_index = ISO_VALUES.index(cfg.default_iso) if cfg.default_iso in ISO_VALUES else 3
+        self._iso = min(max(cfg.default_iso, ISO_VALUES[0]), ISO_VALUES[-1])
         self._busy = False
         self._exp_t0 = 0.0
         self._exp_duration = 0.0
@@ -51,6 +53,9 @@ class Camera:
         self._error: str | None = None
         self._last_start: str | None = None
         self._last_duration: float | None = None
+        # timing of the client's loop, logged to see where the time between frames goes
+        self._image_t = 0.0
+        self._sent_t: float | None = None
 
     # -- connection ------------------------------------------------------------------------------
 
@@ -62,15 +67,27 @@ class Camera:
         if value == self._connected:
             return
         if value:
+            self._finish_disconnect()
             try:
                 self.backend.connect()
             except BackendError as e:
                 raise AlpacaError(UNSPECIFIED, f"cannot connect to camera: {e}") from e
             self._connected = True
         else:
-            self._cancel.set()
-            self.backend.disconnect()
+            # Answer at once: a running exposure cannot be interrupted on the camera, so the backend is
+            # closed in the background when it has finished (its image is discarded).
             self._connected = False
+            self._cancel.set()
+            self._disconnecting = threading.Thread(target=self.backend.disconnect, name="disconnect", daemon=True)
+            self._disconnecting.start()
+
+    def _finish_disconnect(self) -> None:
+        limit = self.cfg.exposure_max * 2 + 120
+        for t in (self._disconnecting, self._exposure_thread):
+            if t is not None and t.is_alive():
+                log.info("waiting for the previous exposure to finish before reconnecting")
+                t.join(limit)
+        self._disconnecting = None
 
     def require_connected(self) -> None:
         if not self._connected:
@@ -78,22 +95,29 @@ class Camera:
 
     # -- gain (ISO) ------------------------------------------------------------------------------
 
+    # Gain is the ISO value itself (Alpaca "GainMin/GainMax" mode), so clients show 100 ... 12800 instead of
+    # list indices. CHDK sets any ISO in between, not only the full stops.
+
     @property
-    def gains(self) -> list[str]:
-        return [str(i) for i in ISO_VALUES]
+    def gain_min(self) -> int:
+        return ISO_VALUES[0]
+
+    @property
+    def gain_max(self) -> int:
+        return ISO_VALUES[-1]
 
     @property
     def gain(self) -> int:
-        return self._gain_index
+        return self._iso
 
-    def set_gain(self, index: int) -> None:
-        if not 0 <= index < len(ISO_VALUES):
-            raise AlpacaError(INVALID_VALUE, f"gain index {index} outside 0..{len(ISO_VALUES) - 1}")
-        self._gain_index = index
+    def set_gain(self, iso: int) -> None:
+        if not self.gain_min <= iso <= self.gain_max:
+            raise AlpacaError(INVALID_VALUE, f"gain (ISO) {iso} outside {self.gain_min}..{self.gain_max}")
+        self._iso = iso
 
     @property
     def iso(self) -> int:
-        return ISO_VALUES[self._gain_index]
+        return self._iso
 
     @property
     def electrons_per_adu(self) -> float:
@@ -138,17 +162,29 @@ class Camera:
 
     @property
     def image_ready(self) -> bool:
+        # A failed exposure reports ImageReady = true and the error comes with ImageArray. N.I.N.A. (3.2)
+        # ignores exceptions from ImageReady and would wait for its own timeout (exposure + 60 s).
         with self._lock:
             if self._error:
-                raise AlpacaError(UNSPECIFIED, f"exposure failed: {self._error}")
+                return True
             return not self._busy and self._image is not None
 
     def image(self) -> np.ndarray:
         """Last image as uint16 (H x W), ROI already applied."""
         with self._lock:
+            if self._error:
+                # ValueNotSet on purpose: for any other error N.I.N.A. (3.2) returns the last image it got
+                # and saves it again as a new frame. ValueNotSet makes it see no image, so the frame fails.
+                raise AlpacaError(VALUE_NOT_SET, f"exposure failed: {self._error}")
             if self._image is None:
                 raise AlpacaError(INVALID_OPERATION, "no image available")
             return self._image
+
+    def image_sent(self, requested_t: float, encode_s: float, send_s: float) -> None:
+        """Called by the server once a client has received the image (times from time.monotonic())."""
+        log.info("image sent: requested %.1fs after it was ready, encoded in %.2fs, transferred in %.1fs",
+                 requested_t - self._image_t, encode_s, send_s)
+        self._sent_t = time.monotonic()
 
     @property
     def last_exposure_start(self) -> str:
@@ -174,6 +210,10 @@ class Camera:
         with self._lock:
             if self._busy:
                 raise AlpacaError(INVALID_OPERATION, "an exposure is already in progress")
+            if self._sent_t is not None:
+                log.info("StartExposure %.1fs after the last image was sent (client processing)",
+                         time.monotonic() - self._sent_t)
+                self._sent_t = None
             self._busy = True
             self._image = None
             self._error = None
@@ -183,8 +223,9 @@ class Camera:
             self._last_start = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
             self._last_duration = duration
         roi = (self.startx, self.starty, self.numx, self.numy)
-        threading.Thread(target=self._expose, args=(duration, self.iso, light, roi, self._cancel),
-                         name="exposure", daemon=True).start()
+        self._exposure_thread = threading.Thread(target=self._expose, args=(duration, self.iso, light, roi, self._cancel),
+                                                 name="exposure", daemon=True)
+        self._exposure_thread.start()
 
     def _expose(self, duration: float, iso: int, light: bool, roi, cancel: threading.Event) -> None:
         x, y, w, h = roi
@@ -194,6 +235,8 @@ class Camera:
             with self._lock:
                 if not cancel.is_set():
                     self._image = img
+                    self._image_t = time.monotonic()
+                    log.info("image ready %.1fs after StartExposure", self._image_t - self._exp_t0)
         except BackendError as e:
             if not cancel.is_set():
                 log.error("exposure failed: %s", e)

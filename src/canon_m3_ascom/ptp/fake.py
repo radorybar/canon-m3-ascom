@@ -41,6 +41,7 @@ class FakeCamera:
         self.ready_raw: bytes | None = None
         self.shots = 0
         self.scripts_run: list[str] = []
+        self.raw_capture_stuck = False
 
     # -- script engine (pattern based) -------------------------------------------------------------
 
@@ -90,6 +91,10 @@ class FakeCamera:
 
     def _shoot(self, exposure_s: float, iso: int, generation: int) -> None:
         time.sleep(exposure_s * self.time_scale)
+        if self.raw_capture_stuck:  # like a camera in the "connected to PC" state: shutter fires, no data
+            if generation == self.generation:
+                self._finish_shot()
+            return
         if self.capture_fmt & chdk.CAPTURE_RAW:
             focus = focuser.read_position(self.focuser_url)
             img = starfield.render(EOS_M3, exposure_s, iso, True, focus)
@@ -98,7 +103,7 @@ class FakeCamera:
                     return
                 self.ready_raw = rawcodec.encode_chdk_raw(img, EOS_M3)
         if generation == self.generation:
-            # like the real M3: shoot() returns while the raw data still waits for the host
+            # like the real M3: the shot script ends while the raw data still waits for the host
             self._finish_shot()
 
     def _finish_shot(self) -> None:

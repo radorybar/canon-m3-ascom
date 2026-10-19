@@ -1,11 +1,11 @@
-﻿# Installs m3alpaca on the telescope PC (e.g. MINIX), from the unpacked project folder.
+# Installs canon-m3-ascom from the unpacked or cloned project folder (installation from source).
 # Run:  powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 # Safe to run again (updates the installation).
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
-Write-Host "m3alpaca install in $root"
+Write-Host "canon-m3-ascom install in $root"
 
 # 1. Python 3.12
 $hasPy = $false
@@ -26,7 +26,7 @@ Write-Host "Python packages installed."
 # 3. configuration (kept if it already exists)
 if (-not (Test-Path config.toml)) {
     @'
-# m3alpaca on the telescope PC. Full documentation: config.example.toml
+# canon-m3-ascom - local configuration. Full documentation: config.example.toml
 
 [server]
 host = "0.0.0.0"
@@ -49,7 +49,7 @@ dark_frame_off = true
 
 # 4. start-up shortcut (optional autostart at logon)
 $startup = [Environment]::GetFolderPath('Startup')
-$lnk = Join-Path $startup 'm3alpaca driver.lnk'
+$lnk = Join-Path $startup 'canon-m3-ascom driver.lnk'
 $answer = Read-Host "Start the driver automatically at Windows logon? (y/N)"
 if ($answer -match '^[yYaA]') {
     $ws = New-Object -ComObject WScript.Shell
@@ -63,6 +63,6 @@ if ($answer -match '^[yYaA]') {
 
 Write-Host ""
 Write-Host "Next:"
-Write-Host "  1. Zadig: give the camera the WinUSB driver (once per PC), see docs\INSTALL-MINIX.md"
-Write-Host "  2. Test:  .venv\Scripts\python.exe -m m3alpaca.ptpdiag --shoot 1"
+Write-Host "  1. Zadig: give the camera the WinUSB driver (once per PC), see docs\INSTALL.md"
+Write-Host "  2. Test:  .venv\Scripts\python.exe -m canon_m3_ascom.ptpdiag --shoot 1"
 Write-Host "  3. Start: scripts\start-driver.cmd, then connect 'Canon EOS M3 (CHDK)' in N.I.N.A."

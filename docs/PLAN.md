@@ -24,9 +24,9 @@ N.I.N.A. sees the Canon EOS M3 as a regular **ASCOM Alpaca camera** over one USB
 ## 3. Architecture
 
 ```
-┌──────────────── telescope PC (Windows) ──────────────────┐
+┌──────────────── imaging PC (Windows) ────────────────────┐
 │                                                          │
-│  N.I.N.A. ──HTTP/Alpaca──► m3alpaca (localhost)          │
+│  N.I.N.A. ──HTTP/Alpaca──► canon-m3-ascom (localhost)          │
 │     │                         │                          │
 │     │ focuser, ASTAP          ├─ Alpaca API (ICameraV3)  │
 │     │ (unchanged)             ├─ Camera (exposure state  │
@@ -78,7 +78,7 @@ register, any language, testable over plain HTTP (curl, ConformU).
 |---|---|
 | `CameraXSize/YSize`, `PixelSizeX/Y` (≈3.72 µm) | EOS M3 constants |
 | `ExposureMin/Max` | 1/4000 s … 300 s (configurable; verified to 120 s) |
-| `Gains` / `Gain` | ISO list (100 … 12800) / index |
+| `GainMin` / `GainMax` / `Gain` | ISO 100 … 12800, Gain = ISO value |
 | `CCDTemperature` | `get_temperature(1)` after each frame |
 | `CanAbortExposure` | false for the real camera |
 | `BinX/Y` | 1 |
@@ -89,7 +89,7 @@ register, any language, testable over plain HTTP (curl, ConformU).
 
 ## 5. One exposure
 
-1. N.I.N.A.: `PUT startexposure(Duration=60, Light=true)` with `Gain=3` (ISO 800).
+1. N.I.N.A.: `PUT startexposure(Duration=60, Light=true)` with `Gain=800` (ISO 800).
 2. Camera → `Exposing`; backend runs the capture sequence above.
 3. The raw buffer (43 MB) arrives over USB in ~1.2 s; Camera → `Download`, decode, `ImageReady=true`.
 4. N.I.N.A. downloads `imagearray` and saves the FITS.

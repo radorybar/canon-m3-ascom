@@ -1,12 +1,12 @@
 # Contributing
 
-Thanks for your interest in m3alpaca. Contributions are welcome through **issues** and **pull requests**.
+Thanks for your interest in canon-m3-ascom. Contributions are welcome through **issues** and **pull requests**.
 Every change to `main` goes through a pull request that the maintainer reviews and approves.
 
 ## Issues
 
 - **Bug reports:** use the bug template and include the output of
-  `python -m m3alpaca.ptpdiag` (and `--shoot 1` if capture fails), camera firmware, CHDK build,
+  `python -m canon_m3_ascom.ptpdiag` (and `--shoot 1` if capture fails), camera firmware, CHDK build,
   Windows and N.I.N.A. versions.
 - **Other cameras:** reports from other CHDK cameras are very welcome; include the `ptpdiag` output.
 - **Feature requests:** describe the use case first.

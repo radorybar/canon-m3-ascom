@@ -8,7 +8,7 @@ from pathlib import Path
 
 def _default_frames_dir() -> str:
     base = os.environ.get("LOCALAPPDATA") or str(Path.home())
-    return str(Path(base) / "m3alpaca" / "frames")
+    return str(Path(base) / "canon-m3-ascom" / "frames")
 
 
 BACKENDS = ("sim", "ptp", "chdk")
@@ -23,6 +23,7 @@ class ServerConfig:
     discovery: bool = True
     discovery_port: int = 32227
     imagebytes_uint16: bool = True  # send pixels as UInt16 (half the bytes); False -> Int32
+    log_dir: str = ""  # "" = "logs" next to the config file (or %LOCALAPPDATA%\canon-m3-ascom\logs)
 
 
 @dataclass
@@ -46,11 +47,17 @@ class ChdkConfig:
 
 @dataclass
 class PtpConfig:
+    transport: str = "auto"  # "auto" | "winusb" (Zadig/libwdi driver) | "wpd" (standard Windows driver)
     pid: int = 0  # USB product id; 0 = first Canon camera found
     lcd_off: bool = False  # turn the camera's LCD off (less heat) once connected
     prevent_shutdown: bool = True  # CHDK alt_prevent_shutdown = always
     dark_frame_off: bool = True  # CHDK raw noise reduction off (no automatic dark frame)
+    # Send the DryOS "unlock" event (4482) when connecting. Needed whenever the standard Windows driver has
+    # touched the camera since it was switched on (WPD transport, or right after a driver change); without
+    # it remote capture fires the shutter but never delivers data. Verified harmless on the EOS M3.
+    unlock: bool = True
     timeout_extra_s: float = 30.0
+    keepalive_s: float = 60.0  # while idle, query the camera this often (temperature, link check); 0 = off
     keep_raw: bool = False  # also save every .raw buffer to camera.frames_dir
     fake: bool = False  # emulate the camera at the USB/PTP level (no hardware needed)
     fake_download_s: float = 3.0

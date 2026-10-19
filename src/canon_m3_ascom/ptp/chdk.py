@@ -32,6 +32,11 @@ class Cmd(IntEnum):
     REMOTE_CAPTURE_GET_DATA = 14
 
 
+# commands whose answer has a data phase (device -> host); WPD must be told in advance
+DATA_IN_COMMANDS = {Cmd.GET_MEMORY, Cmd.DOWNLOAD_FILE, Cmd.READ_SCRIPT_MSG, Cmd.GET_DISPLAY_DATA,
+                    Cmd.REMOTE_CAPTURE_GET_DATA}
+
+
 class MsgType(IntEnum):
     NONE = 0
     ERROR = 1
@@ -93,7 +98,8 @@ class ChdkClient:
         self.version: tuple[int, int] = (0, 0)
 
     def _cmd(self, cmd: Cmd, *params: int, data: bytes | None = None, timeout_ms: int = 5000):
-        return self.s.transaction(OC_CHDK, [int(cmd), *params], data_out=data, timeout_ms=timeout_ms)
+        return self.s.transaction(OC_CHDK, [int(cmd), *params], data_out=data, timeout_ms=timeout_ms,
+                                  data_in=cmd in DATA_IN_COMMANDS)
 
     def get_version(self) -> tuple[int, int]:
         try:

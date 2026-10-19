@@ -1,8 +1,8 @@
 """First-contact diagnostics for the camera over CHDK PTP.
 
-  python -m m3alpaca.ptpdiag              # read-only checks: USB, PTP, CHDK, camera info
-  python -m m3alpaca.ptpdiag --shoot 5    # also take one 5 s raw frame over USB and analyse it
-  python -m m3alpaca.ptpdiag --fake ...   # same against the emulated camera
+  python -m canon_m3_ascom.ptpdiag              # read-only checks: USB, PTP, CHDK, camera info
+  python -m canon_m3_ascom.ptpdiag --shoot 5    # also take one 5 s raw frame over USB and analyse it
+  python -m canon_m3_ascom.ptpdiag --fake ...   # same against the emulated camera
 
 Each step is reported separately so a failure points at the layer that broke.
 """
@@ -21,7 +21,8 @@ from .backends.base import BackendError
 from .backends.ptp import PtpBackend
 from .config import Config
 from .ptp import chdk, scripts
-from .ptp.transport import CANON_VID, PtpError, PtpSession, UsbTransport
+from .ptp.connect import TRANSPORTS, open_session
+from .ptp.transport import CANON_VID, PtpError, PtpSession
 from .sensor import EOS_M3
 
 
@@ -55,22 +56,28 @@ def run(args) -> int:
     else:
         step("1. USB")
         list_usb()
-        make_transport = lambda: UsbTransport(args.pid)  # noqa: E731
+        make_transport = lambda: open_session(args.transport, args.pid)  # noqa: E731
 
-    step("2. Open the camera (needs the WinUSB driver from Zadig)")
+    step(f"2. Open the camera (transport: {args.transport})")
     try:
-        transport = make_transport()
+        made = make_transport()
     except PtpError as e:
         fail(str(e))
         return 1
-    ok(f"USB interface claimed, max packet {transport.max_packet} B")
+    session = made if hasattr(made, "transaction") else PtpSession(made)
+    is_wpd = type(session).__name__ == "WpdSession"
+    ok("standard Windows driver via WPD (no driver change)" if is_wpd
+       else f"WinUSB, max packet {session.t.max_packet} B")
 
-    session = PtpSession(transport)
     try:
         step("3. PTP session")
         session.open()
         info = session.device_info()
         ok(f"{info.manufacturer} {info.model}, firmware {info.version}, serial {info.serial}")
+        if is_wpd:
+            ops = info.operations
+            ok(f"camera advertises {len(ops)} vendor operations; CHDK 0x{chdk.OC_CHDK:04X} "
+               f"{'is listed' if chdk.OC_CHDK in ops else 'is not listed (normal for CHDK, sent anyway)'}")
 
         step("4. CHDK")
         client = chdk.ChdkClient(session)
@@ -79,7 +86,7 @@ def run(args) -> int:
 
         step("5. Lua on the camera (read-only)")
         build, platform, temp, support, mode = scripts.parse_result(client.execwait(scripts.INFO))
-        ok(f"CHDK {build} for {platform}, sensor {temp} °C, camera in {mode} mode")
+        ok(f"CHDK {build} for {platform}, sensor {temp} C, camera in {mode} mode")
         support = int(support)
         if support & chdk.CAPTURE_RAW:
             ok(f"USB remote capture supported (formats 0x{support:X}: raw{', dng' if support & 4 else ''})")
@@ -104,12 +111,13 @@ def run(args) -> int:
     out = Path(args.out)
     cfg = Config()
     cfg.ptp.fake = args.fake
+    cfg.ptp.transport = args.transport
     cfg.ptp.keep_raw = True  # keep the untouched buffer, incl. the masked border
     cfg.camera.frames_dir = str(out)
     backend = PtpBackend(cfg, transport_factory=make_transport)
     try:
         backend.connect()
-        ok(f"connected, record mode, sensor {backend.sensor_temperature()} °C")
+        ok(f"connected, record mode, sensor {backend.sensor_temperature()} C")
         t0 = time.monotonic()
         img = backend.capture(args.shoot, args.iso, True, threading.Event())
         total = time.monotonic() - t0
@@ -136,13 +144,15 @@ def run(args) -> int:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(prog="python -m m3alpaca.ptpdiag", description=__doc__,
+    ap = argparse.ArgumentParser(prog="python -m canon_m3_ascom.ptpdiag", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--shoot", type=float, default=0, help="take one raw frame of this many seconds")
     ap.add_argument("--iso", type=int, default=800)
     ap.add_argument("--out", default="frames", help="where to save the test frame")
     ap.add_argument("--pid", type=lambda s: int(s, 16), default=0, help="USB product id (hex) if several cameras")
     ap.add_argument("--fake", action="store_true", help="use the emulated camera")
+    ap.add_argument("--transport", choices=TRANSPORTS, default="auto",
+                    help="winusb (Zadig/libwdi driver), wpd (standard Windows driver) or auto")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="     %(message)s")

@@ -3,6 +3,7 @@
 import html
 import itertools
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -10,11 +11,12 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 
 from .. import __version__
 from ..camera import Camera
 from . import imagebytes
-from .errors import ACTION_NOT_IMPLEMENTED, INVALID_VALUE, AlpacaError, not_implemented
+from .errors import ACTION_NOT_IMPLEMENTED, INVALID_VALUE, UNSPECIFIED, AlpacaError, not_implemented
 
 log = logging.getLogger(__name__)
 
@@ -134,7 +136,7 @@ def build_members(cam: Camera, cfg_server) -> dict[str, tuple[Getter | None, Set
         # common device members
         "connected": (connected_get, connected_put),
         "description": (lambda: cam.backend.description, None),
-        "driverinfo": (lambda: f"m3alpaca {__version__}: Canon EOS M3 + CHDK via chdkptp", None),
+        "driverinfo": (lambda: f"Canon M3 ASCOM {__version__}: Canon EOS M3 + CHDK (USB remote capture)", None),
         "driverversion": (lambda: __version__, None),
         "interfaceversion": (lambda: INTERFACE_VERSION, None),
         "name": (lambda: DEVICE_NAME, None),
@@ -167,10 +169,11 @@ def build_members(cam: Camera, cfg_server) -> dict[str, tuple[Getter | None, Set
         "fullwellcapacity": (connected(lambda: cam.full_well), None),
         "hasshutter": (connected(lambda: False), None),
         # gain = ISO (list mode)
-        "gains": (connected(lambda: cam.gains), None),
+        # gain = ISO in "min/max" mode; Gains (list mode) must then be NotImplemented per the ASCOM spec
+        "gains": (_ni("Gains"), None),
         "gain": (connected(lambda: cam.gain), gain_put),
-        "gainmin": (_ni("GainMin"), None),
-        "gainmax": (_ni("GainMax"), None),
+        "gainmin": (connected(lambda: cam.gain_min), None),
+        "gainmax": (connected(lambda: cam.gain_max), None),
         "offset": (_ni("Offset"), _ni("Offset")),
         "offsetmin": (_ni("OffsetMin"), None),
         "offsetmax": (_ni("OffsetMax"), None),
@@ -215,9 +218,10 @@ def build_members(cam: Camera, cfg_server) -> dict[str, tuple[Getter | None, Set
 
 
 def create_app(cam: Camera, cfg_server) -> FastAPI:
-    app = FastAPI(title="m3alpaca", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="canon-m3-ascom", docs_url=None, redoc_url=None, openapi_url=None)
     members = build_members(cam, cfg_server)
     server_tx = itertools.count(1)
+    # seed from the project's former name (m3alpaca): changing it would make N.I.N.A. see a new device
     unique_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "m3alpaca/camera/0"))
 
     def reply(value: Any, client_tx: int, error: AlpacaError | None = None) -> JSONResponse:
@@ -245,7 +249,7 @@ def create_app(cam: Camera, cfg_server) -> FastAPI:
 
     @app.get("/management/v1/description")
     async def description(request: Request):
-        return reply({"ServerName": "m3alpaca", "Manufacturer": "m3alpaca",
+        return reply({"ServerName": "Canon M3 ASCOM", "Manufacturer": "canon-m3-ascom",
                       "ManufacturerVersion": __version__, "Location": "localhost"},
                      (await read_params(request)).transaction_id())
 
@@ -268,7 +272,7 @@ def create_app(cam: Camera, cfg_server) -> FastAPI:
             "Exposure range": f"{cam.cfg.exposure_min:g} – {cam.cfg.exposure_max:g} s",
         }
         trs = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(str(v))}</td></tr>" for k, v in rows.items())
-        return f"""<!doctype html><html><head><meta charset="utf-8"><title>m3alpaca</title>
+        return f"""<!doctype html><html><head><meta charset="utf-8"><title>Canon M3 ASCOM</title>
 <style>body{{font-family:system-ui;margin:2rem}}th{{text-align:left;padding-right:1rem}}</style></head>
 <body><h1>{html.escape(DEVICE_NAME)}</h1><table>{trs}</table>
 <p>Configuration is in the TOML file passed with <code>--config</code>.</p></body></html>"""
@@ -298,24 +302,35 @@ def create_app(cam: Camera, cfg_server) -> FastAPI:
             if member in ("imagearray", "imagearrayvariant"):
                 cam.require_connected()
                 img = cam.image()
+                t0 = time.monotonic()
+                timing = {"encoded": t0}  # JSON is encoded while it is streamed
+
+                def sent():
+                    cam.image_sent(t0, timing["encoded"] - t0, time.monotonic() - timing["encoded"])
+
                 if wants_bytes:
                     data = await run_in_threadpool(imagebytes.encode, img, client_tx, next(server_tx),
                                                    cfg_server.imagebytes_uint16)
-                    return Response(data, media_type="application/imagebytes")
+                    timing["encoded"] = time.monotonic()
+                    return Response(data, media_type="application/imagebytes", background=BackgroundTask(sent))
                 return StreamingResponse(_json_image(img, client_tx, next(server_tx)),
-                                         media_type="application/json")
+                                         media_type="application/json", background=BackgroundTask(sent))
             if request.method == "GET":
                 return reply(await run_in_threadpool(handler), client_tx)
             await run_in_threadpool(handler, params)
             return reply(None, client_tx)
         except BadRequest as e:
             return PlainTextResponse(str(e), status_code=400)
-        except AlpacaError as e:
-            if wants_bytes:
-                return Response(imagebytes.encode_error(e.number, e.message, client_tx, next(server_tx)),
-                                media_type="application/imagebytes")
+        except Exception as exc:  # noqa: BLE001 - every failure becomes an Alpaca error, never HTTP 500
+            if isinstance(exc, AlpacaError):
+                e = exc
+            else:
+                log.exception("unexpected error in %s %s", request.method, member)
+                e = AlpacaError(UNSPECIFIED, f"{type(exc).__name__}: {exc}")
+            # Errors are JSON even when ImageBytes was asked for: the ASCOM client library reads the error only
+            # from JSON (an ImageBytes error becomes a generic exception, and N.I.N.A. then reuses the last image).
             return reply(None, client_tx, e)
 
     # legacy / fallback page for the Alpaca "setup" link on the root
-    app.add_api_route("/", lambda: HTMLResponse('<a href="/setup">m3alpaca setup</a>'), methods=["GET"])
+    app.add_api_route("/", lambda: HTMLResponse('<a href="/setup">Canon M3 ASCOM status</a>'), methods=["GET"])
     return app

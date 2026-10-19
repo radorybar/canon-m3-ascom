@@ -1,7 +1,7 @@
 import numpy as np
 
-from m3alpaca import rawcodec
-from m3alpaca.sensor import EOS_M3
+from canon_m3_ascom import rawcodec
+from canon_m3_ascom.sensor import EOS_M3
 
 
 def chdk_get_raw_pixel(buf: bytes, row_len: int, x: int, y: int) -> int:
@@ -35,6 +35,14 @@ def test_matches_chdk_reference():
     for y in range(h):
         for x in range(w):
             assert chdk_get_raw_pixel(buf, row_len, x, y) == img[y, x], (x, y)
+
+
+def test_fast_decoder_matches_generic_unpacker():
+    rng = np.random.default_rng(4)
+    full = rng.integers(0, 1 << 14, size=(EOS_M3.raw_height, EOS_M3.raw_width), dtype=np.uint16)
+    data = rawcodec.pack14(full, word_swapped=True)
+    expected = full[EOS_M3.active_top:EOS_M3.active_bottom, EOS_M3.active_left:EOS_M3.active_right]
+    assert np.array_equal(rawcodec.decode_chdk_raw(data, EOS_M3), expected)
 
 
 def test_full_m3_frame():

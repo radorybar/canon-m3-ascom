@@ -2,7 +2,7 @@ import struct
 
 import numpy as np
 
-from m3alpaca.alpaca import imagebytes
+from canon_m3_ascom.alpaca import imagebytes
 
 
 def test_header_and_order():

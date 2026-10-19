@@ -13,4 +13,4 @@ body:
     id: proposal
     attributes:
       label: Proposal
-      description: How could m3alpaca help? For another CHDK camera, include the `ptpdiag` output.
+      description: How could canon-m3-ascom help? For another CHDK camera, include the `ptpdiag` output.

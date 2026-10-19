@@ -27,9 +27,10 @@ RC_SESSION_ALREADY_OPEN = 0x201E
 
 HEADER = struct.Struct("<IHHI")  # length, type, code, transaction id
 READ_CHUNK = 1 << 20
+MAX_STALE_CONTAINERS = 16
 
-ZADIG_HINT = ("Windows still uses its own camera driver. Run C:\\tools\\zadig\\zadig-2.9.exe, "
-              "Options > List All Devices, select the Canon camera (USB ID 04A9 ...), driver WinUSB, Replace Driver.")
+ZADIG_HINT = ("The camera does not have the WinUSB driver. Use transport \"wpd\" (standard driver), or install "
+              "WinUSB with the canon-m3-ascom setup (option 'Install the WinUSB driver') or with Zadig.")
 
 
 class PtpError(Exception):
@@ -105,31 +106,56 @@ class PtpSession:
         data = b"".join(chunks)
         return ctype, code, tid, data[HEADER.size:length]
 
-    def transaction(self, op: int, params=(), data_out: bytes | None = None,
-                    timeout_ms: int = 5000, check: bool = True, tid: int | None = None) -> Response:
+    def transaction(self, op: int, params=(), data_out: bytes | None = None, timeout_ms: int = 5000,
+                    check: bool = True, tid: int | None = None, data_in: bool = False) -> Response:
+        # data_in (the operation returns a data phase) matters only for WPD; on USB the device says so itself
         tid = self._next_tid() if tid is None else tid
         params = list(params)
         self._send(COMMAND, op, tid, struct.pack(f"<{len(params)}I", *params), timeout_ms)
         if data_out is not None:
             self._send(DATA, op, tid, data_out, timeout_ms)
         data_in = None
+        stale = 0
         while True:
             ctype, code, rtid, payload = self._read_container(timeout_ms)
+            if ctype in (DATA, RESPONSE) and rtid != tid:
+                # left over from an earlier, aborted transaction: taking it as our answer would shift every
+                # later response by one
+                stale += 1
+                log.warning("skipping stale PTP container (type %d, transaction %d, expected %d)", ctype, rtid, tid)
+                if stale > MAX_STALE_CONTAINERS:
+                    raise PtpError("PTP stream out of sync (too many stale containers)")
+                continue
             if ctype == DATA:
                 data_in = payload
                 continue
             if ctype == RESPONSE:
                 break
             log.debug("ignoring PTP container type %d code 0x%04X", ctype, code)
-        if rtid != tid:
-            log.warning("PTP transaction id mismatch: sent %d, got %d", tid, rtid)
         resp = Response(code, list(struct.unpack(f"<{len(payload) // 4}I", payload[:len(payload) // 4 * 4])),
                         data_in)
         if check and code != RC_OK:
             raise PtpResponseError(op, code)
         return resp
 
+    def drain(self) -> int:
+        """Read and discard whatever is still waiting in the IN pipe (e.g. after an aborted transfer)."""
+        dropped = 0
+        for _ in range(256):  # bounded: at most 256 reads of up to 1 MB
+            try:
+                chunk = self.t.read(READ_CHUNK, 100)
+            except PtpTimeout:
+                break
+            dropped += len(chunk)
+        return dropped
+
     def open(self, session_id: int = 1) -> None:
+        dropped = self.drain()
+        if dropped:
+            log.warning("discarded %d stale bytes from the camera before opening the session", dropped)
+            reset = getattr(self.t, "reset", None)
+            if reset:
+                reset()
         self._tid = 0  # OpenSession uses transaction id 0, the first real transaction is 1
         resp = self.transaction(OC_OPEN_SESSION, [session_id], check=False, tid=0)
         if resp.code == RC_SESSION_ALREADY_OPEN:
@@ -140,9 +166,12 @@ class PtpSession:
     def close(self) -> None:
         try:
             self.transaction(OC_CLOSE_SESSION, check=False, timeout_ms=2000)
-        except PtpError:
+        except Exception:  # noqa: BLE001 - the link may already be broken; closing must not fail
             pass
-        self.t.close()
+        try:
+            self.t.close()
+        except Exception as e:  # noqa: BLE001
+            log.debug("closing transport: %s", e)
 
     def device_info(self) -> "DeviceInfo":
         return DeviceInfo.parse(self.transaction(OC_GET_DEVICE_INFO).data or b"")
@@ -216,8 +245,11 @@ class UsbTransport:
         import usb.util
 
         self._usb = usb
-        backend = libusb_package.get_libusb1_backend()
-        devices = list(usb.core.find(find_all=True, idVendor=CANON_VID, backend=backend))
+        try:
+            backend = libusb_package.get_libusb1_backend()
+            devices = list(usb.core.find(find_all=True, idVendor=CANON_VID, backend=backend))
+        except (usb.core.USBError, usb.core.NoBackendError, OSError, ValueError) as e:
+            raise PtpError(f"USB enumeration failed: {e}") from e
         if pid:
             devices = [d for d in devices if d.idProduct == pid]
         if not devices:
@@ -248,7 +280,7 @@ class UsbTransport:
             self.dev.write(self.ep_out, data, timeout_ms)
         except self._usb.core.USBTimeoutError as e:
             raise PtpTimeout("USB write timed out") from e
-        except self._usb.core.USBError as e:
+        except (self._usb.core.USBError, OSError, ValueError) as e:  # e.g. cable pulled, device gone
             raise PtpError(f"USB write failed: {e}") from e
 
     def read(self, size: int, timeout_ms: int) -> bytes:
@@ -256,11 +288,24 @@ class UsbTransport:
             return bytes(self.dev.read(self.ep_in, size, timeout_ms))
         except self._usb.core.USBTimeoutError as e:
             raise PtpTimeout("USB read timed out") from e
-        except self._usb.core.USBError as e:
+        except (self._usb.core.USBError, OSError, ValueError) as e:
             raise PtpError(f"USB read failed: {e}") from e
 
+    def reset(self) -> None:
+        """PTP class 'Device Reset' and clear both bulk pipes (after stale data was found)."""
+        for step in (lambda: self.dev.ctrl_transfer(0x21, 0x66, 0, self.interface, None, 2000),
+                     lambda: self.dev.clear_halt(self.ep_in),
+                     lambda: self.dev.clear_halt(self.ep_out)):
+            try:
+                step()
+            except Exception as e:  # noqa: BLE001 - best effort, some cameras reject the class request
+                log.debug("USB reset step failed: %s", e)
+
     def close(self) -> None:
-        try:
-            self._usb.util.release_interface(self.dev, self.interface)
-        finally:
-            self._usb.util.dispose_resources(self.dev)
+        """Never raises: the device may already be gone."""
+        for step in (lambda: self._usb.util.release_interface(self.dev, self.interface),
+                     lambda: self._usb.util.dispose_resources(self.dev)):
+            try:
+                step()
+            except Exception as e:  # noqa: BLE001
+                log.debug("closing USB device: %s", e)
